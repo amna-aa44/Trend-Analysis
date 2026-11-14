@@ -130,29 +130,49 @@ def format_change(value):
     return f"{value:+.2f}%" if pd.notna(value) else "N/A"
 
 
-def test_description(result, indicator):
+def trend_label(result):
+    return result.trend.capitalize() if result is not None else "Not enough data/variation"
+
+
+def trend_p(result):
+    return f"{result.p:.4f}" if result is not None else "N/A"
+
+
+def trend_slope(result, unit):
+    return f"{result.slope:+.5g} {unit}" if result is not None else "N/A"
+
+
+def trend_interpretation(result, indicator, unit):
     if result is None:
-        return f"There is insufficient variation or yearly data to estimate a reliable {indicator} trend."
-    direction = result.trend.lower()
-    evidence = "statistically significant at the 5% level" if result.p < 0.05 else "not statistically significant at the 5% level"
+        return f"There is insufficient variation or yearly data to estimate a reliable trend in {indicator}."
+    evidence = "statistically significant" if result.p < 0.05 else "not statistically significant"
     return (
-        f"The annual/seasonal series indicates a {direction} in {indicator} "
-        f"(Sen slope {result.slope:+.5g} per year; p = {result.p:.4f}), {evidence}."
+        f"The estimated direction is **{result.trend.lower()}**. Sen's slope is "
+        f"**{result.slope:+.5g} {unit} per year**, and the p-value is **{result.p:.4f}**; "
+        f"this trend is {evidence} at the 0.05 threshold."
     )
 
 
-# Restore the original project title.
+def comparison_direction(value):
+    if pd.isna(value):
+        return "cannot be compared because one period has no usable data"
+    if value > 0:
+        return f"increased by {value:.2f}%"
+    if value < 0:
+        return f"decreased by {abs(value):.2f}%"
+    return "was effectively unchanged"
+
+
 st.title("🌾 The story of Shakargarh's resources: Crop-Water stress in the past 4 decades")
 st.markdown(
     """### Research overview
     This dashboard examines long-term seasonal variability in modeled evapotranspiration (ET) and
-    root-zone soil moisture over Shakargarh using NASA FLDAS monthly area-average time series. Where
-    available, Terra MODIS NDVI is included as a satellite-derived vegetation greenness indicator.
-    Comparing ET with soil moisture describes how atmospheric water use and modeled root-zone supply
-    co-vary; NDVI provides complementary context on vegetation condition. The analysis summarizes
-    annual and crop-season patterns through 2025 and reports autocorrelation-adjusted
-    Mann–Kendall trend evidence. These associations are descriptive and do not establish causation,
-    crop yield impacts, or field-level water availability."""
+    root-zone soil moisture across Shakargarh using NASA FLDAS monthly area-average time series.
+    Where available, Terra MODIS NDVI provides a complementary satellite-derived measure of vegetation
+    greenness. Comparing ET and soil moisture characterizes their temporal association and seasonal
+    co-variation; the trend tests assess monotonic changes in each indicator over time. Results are
+    descriptive, and do not by themselves establish causation, crop-yield impacts, or field-level
+    water availability."""
 )
 
 with st.sidebar:
@@ -205,8 +225,10 @@ if annual.empty:
 before = annual[annual["Year"] < split_year]
 after = annual[annual["Year"] >= split_year]
 
+
 def group_mean(frame, column):
     return frame[column].mean() if not frame.empty else np.nan
+
 
 et_change = percent_change(group_mean(before, "ET_mm_month"), group_mean(after, "ET_mm_month"))
 sm_change = percent_change(group_mean(before, "SM_10_40cm"), group_mean(after, "SM_10_40cm"))
@@ -233,105 +255,208 @@ c4.metric(
     f"Pearson p = {p_value:.2e}" if pd.notna(p_value) else None,
 )
 
-with st.expander("Methods and interpretation"):
+with st.expander("Methods and data interpretation"):
     st.markdown(
         """- **ET:** Giovanni monthly mean flux converted to monthly depth using each month's actual duration.
         - **Root-zone moisture:** FLDAS soil moisture for the 10–40 cm layer.
         - **Relative demand index:** ET divided by root-zone moisture scaled by 300. It is an exploratory ratio, not a validated drought or crop-stress index.
-        - **Trend test:** Hamed–Rao modified Mann–Kendall test applied to yearly/seasonal averages. A p-value below 0.05 indicates statistical evidence of a monotonic trend under the test assumptions; it does not identify a cause.
-        - **Spatial and practical scope:** FLDAS values are modeled area averages. They should guide questions and monitoring priorities, not replace field measurements, irrigation records, rainfall data, or agronomic advice."""
+        - **Trend test:** Hamed–Rao modified Mann–Kendall test applied to yearly/seasonal averages. Statistical significance does not establish cause.
+        - **Scope:** FLDAS values are modeled area averages. They should guide questions and monitoring priorities, not replace field measurements, irrigation records, rainfall data, or agronomic advice."""
     )
 
-st.subheader("📈 Seasonal water trends and local interpretation")
-chart_column, interpretation_column = st.columns([1.75, 1], gap="large")
-with chart_column:
-    if len(annual) < 2:
-        st.info("At least two years of data are needed to draw trend lines.")
-    else:
-        fig = make_subplots(
-            rows=3,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.08,
-            subplot_titles=(
-                "Evapotranspiration (mm/month)",
-                "Root-zone soil moisture (10–40 cm)",
-                "Relative demand index (exploratory)",
+st.subheader("📈 Seasonal water trends")
+if len(annual) < 2:
+    st.info("At least two years of data are needed to draw trend lines.")
+else:
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=(
+            "Evapotranspiration (mm/month)",
+            "Root-zone soil moisture (10–40 cm)",
+            "Relative demand index (exploratory)",
+        ),
+    )
+    chart_series = [
+        ("ET_mm_month", "#c84b31", "#6b1d0e"),
+        ("SM_10_40cm", "#005a9c", "#002b49"),
+        ("Aridity_Stress_Idx", "#d97706", "#78350f"),
+    ]
+    for row, (column, line_color, trend_color) in enumerate(chart_series, start=1):
+        points = annual[["Year", column]].dropna()
+        fig.add_trace(
+            go.Scatter(
+                x=points["Year"], y=points[column], mode="lines+markers",
+                line={"color": line_color}, name=column, showlegend=False,
             ),
+            row=row,
+            col=1,
         )
-        chart_series = [
-            ("ET_mm_month", "#c84b31", "#6b1d0e"),
-            ("SM_10_40cm", "#005a9c", "#002b49"),
-            ("Aridity_Stress_Idx", "#d97706", "#78350f"),
-        ]
-        for row, (column, line_color, trend_color) in enumerate(chart_series, start=1):
-            points = annual[["Year", column]].dropna()
+        if len(points) >= 2:
+            slope, intercept = np.polyfit(points["Year"], points[column], 1)
             fig.add_trace(
                 go.Scatter(
-                    x=points["Year"], y=points[column], mode="lines+markers",
-                    line={"color": line_color}, name=column, showlegend=False,
+                    x=points["Year"], y=slope * points["Year"] + intercept,
+                    mode="lines", line={"color": trend_color, "dash": "dash"},
+                    showlegend=False,
                 ),
                 row=row,
                 col=1,
             )
-            if len(points) >= 2:
-                slope, intercept = np.polyfit(points["Year"], points[column], 1)
-                fig.add_trace(
-                    go.Scatter(
-                        x=points["Year"], y=slope * points["Year"] + intercept,
-                        mode="lines", line={"color": trend_color, "dash": "dash"},
-                        showlegend=False,
-                    ),
-                    row=row,
-                    col=1,
-                )
-        fig.add_vline(x=split_year, line_width=1.5, line_dash="dot", line_color="green")
-        fig.update_layout(
-            height=700, template="plotly_white", showlegend=False,
-            hovermode="x unified", margin={"t": 55, "b": 35, "l": 25, "r": 20},
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    fig.add_vline(x=split_year, line_width=1.5, line_dash="dot", line_color="green")
+    fig.update_layout(
+        height=700, template="plotly_white", showlegend=False,
+        hovermode="x unified", margin={"t": 55, "b": 35, "l": 25, "r": 20},
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
-with interpretation_column:
-    st.markdown("#### What the selected data indicates")
-    st.write(
-        f"**ET:** {format_change(et_change)} comparing the mean before {split_year} with the mean from {split_year} onward. "
-        + test_description(mk_et, "evapotranspiration")
-    )
-    st.write(
-        f"**Root-zone moisture:** {format_change(sm_change)} across the same comparison. "
-        + test_description(mk_sm, "root-zone soil moisture")
-    )
-    st.write(
-        f"**Relative demand:** {format_change(stress_change)}. "
-        + test_description(mk_stress, "the exploratory relative-demand index")
-    )
-    st.write(
-        f"For the selected months, monthly soil moisture and ET have Pearson r = "
-        f"{r_value:.3f} (p = {p_value:.2e})" if pd.notna(r_value)
-        else "There are insufficient paired observations or variation to estimate the monthly soil-moisture–ET correlation."
-    )
-
-    st.markdown("#### Practical use for farmers and researchers")
+# First explanatory board: association, trend method, Sen slope and p-values.
+with st.container(border=True):
+    st.subheader("Relation between Evapotranspiration and Soil Moisture")
     st.markdown(
-        """- **For farmers:** Use the seasonal pattern to decide when to check field soil moisture and crop condition more frequently. Compare the regional signal with field observations before changing irrigation timing or amounts.
-        - **For researchers and extension teams:** Treat divergence between ET and root-zone moisture as a monitoring question. Validate it against rainfall, irrigation, crop calendars, and local soil measurements.
-        - **Interpret cautiously:** A rise in modeled soil moisture does not by itself establish more usable water, and ET is not a direct measurement of crop water requirement or yield."""
+        f"For **{season}**, the monthly paired observations show a Pearson correlation of "
+        f"**r = {r_value:.3f}** (p = **{p_value:.3g}**). This describes the strength and direction "
+        "of linear co-variation in the selected months; it does not show that one variable causes the other."
+        if pd.notna(r_value)
+        else "There are not enough paired observations with variation to calculate a reliable monthly correlation for this selection."
     )
 
-st.subheader("Statistical evidence")
+    relation_chart_col, relation_stats_col = st.columns([1.25, 1], gap="large")
+    with relation_chart_col:
+        scatter_data = selected[["SM_10_40cm", "ET_mm_month"]].dropna()
+        if len(scatter_data) >= 2:
+            scatter = go.Figure()
+            scatter.add_trace(
+                go.Scatter(
+                    x=scatter_data["SM_10_40cm"],
+                    y=scatter_data["ET_mm_month"],
+                    mode="markers",
+                    marker={"color": "#167d8d", "opacity": 0.65, "size": 8},
+                    name="Monthly observations",
+                    customdata=selected.loc[scatter_data.index, "Date"].astype(str),
+                    hovertemplate="Date: %{customdata}<br>Soil moisture: %{x:.4f}<br>ET: %{y:.3f} mm/month<extra></extra>",
+                )
+            )
+            if scatter_data["SM_10_40cm"].nunique() > 1:
+                slope_line, intercept_line = np.polyfit(
+                    scatter_data["SM_10_40cm"], scatter_data["ET_mm_month"], 1
+                )
+                x_line = np.linspace(scatter_data["SM_10_40cm"].min(), scatter_data["SM_10_40cm"].max(), 100)
+                scatter.add_trace(
+                    go.Scatter(
+                        x=x_line,
+                        y=slope_line * x_line + intercept_line,
+                        mode="lines",
+                        line={"color": "#c84b31", "dash": "dash"},
+                        name="Linear guide",
+                    )
+                )
+            scatter.update_layout(
+                template="plotly_white",
+                xaxis_title="Root-zone soil moisture (10–40 cm)",
+                yaxis_title="Evapotranspiration (mm/month)",
+                height=390,
+                margin={"t": 25, "b": 45, "l": 45, "r": 15},
+            )
+            st.plotly_chart(scatter, use_container_width=True)
+        else:
+            st.info("Not enough monthly pairs are available to draw the relationship plot.")
+
+    with relation_stats_col:
+        st.markdown("#### Annual/seasonal Mann–Kendall results")
+        st.caption("The test is applied separately to the annual/seasonal ET and soil-moisture series.")
+        stat_rows = []
+        for name, result, unit in [
+            ("Evapotranspiration", mk_et, "mm/month per year"),
+            ("Root-zone soil moisture", mk_sm, "soil-moisture units per year"),
+        ]:
+            stat_rows.append(
+                {
+                    "Indicator": name,
+                    "Trend": trend_label(result),
+                    "Sen slope": trend_slope(result, unit),
+                    "p-value": trend_p(result),
+                }
+            )
+        st.dataframe(pd.DataFrame(stat_rows), hide_index=True, use_container_width=True)
+
+        with st.expander("How to interpret the Mann–Kendall test, slope, and p-value"):
+            st.markdown(
+                """- **Mann–Kendall test:** A non-parametric test for whether a series has a consistent monotonic upward or downward trend over time. The Hamed–Rao modification adjusts the test for serial autocorrelation.
+                - **Sen slope:** The median rate of change between observations. Positive means the indicator tends to increase; negative means it tends to decrease. Units are shown for each indicator.
+                - **p-value:** Under the no-monotonic-trend null hypothesis and test assumptions, this is the probability of observing a test statistic at least this extreme. A common threshold is **p < 0.05**; it is not the probability that the trend is true.
+                - **Important distinction:** Pearson r summarizes monthly ET–moisture association; the Mann–Kendall test and Sen slope assess long-run trends in each indicator separately."""
+            )
+        st.markdown("#### Trend statements for this selection")
+        st.markdown(
+            f"**ET:** {trend_interpretation(mk_et, 'evapotranspiration', 'mm/month')}\n\n"
+            f"**Soil moisture:** {trend_interpretation(mk_sm, 'root-zone soil moisture', 'moisture units')}"
+        )
+
+# Second explanatory board: use actual values and allow the reader to choose their perspective.
+with st.container(border=True):
+    st.subheader("What does it mean for you?")
+    audience = st.selectbox(
+        "Choose a perspective to see how to use this result",
+        ["Farmer or farm manager", "Researcher or student", "Extension worker or planner", "General reader"],
+        key="audience_perspective",
+    )
+
+    et_direction = comparison_direction(et_change)
+    moisture_direction = comparison_direction(sm_change)
+    stress_direction = comparison_direction(stress_change)
+
+    st.markdown(
+        f"In **{season}**, comparing the period before **{split_year}** with {split_year} onward, "
+        f"the mean ET {et_direction}, while root-zone soil moisture {moisture_direction}. "
+        f"The exploratory relative-demand index {stress_direction}."
+    )
+
+    if audience == "Farmer or farm manager":
+        st.markdown(
+            "Use this regional seasonal signal as a prompt for **when and where to check fields**, not as an irrigation prescription. "
+            "If modeled ET rises while modeled root-zone moisture falls or remains stable, prioritize field soil-moisture checks and crop scouting during the selected months. "
+            "Before changing irrigation, compare with recent rainfall, soil type, crop stage, and on-farm observations."
+        )
+    elif audience == "Researcher or student":
+        st.markdown(
+            "Use the selected seasonal series to formulate hypotheses about water demand and root-zone supply. "
+            "Report the Mann–Kendall direction, Sen slope, p-value, sample period, and the monthly Pearson association separately. "
+            "For attribution, validate against precipitation, temperature, irrigation records, crop calendars, and field measurements; the dashboard alone cannot identify causes."
+        )
+    elif audience == "Extension worker or planner":
+        st.markdown(
+            "Use the result to identify seasons or locations where additional monitoring may be valuable. "
+            "Pair regional FLDAS patterns with local soil-moisture observations, rainfall records, and farmer reports before developing outreach or water-management recommendations."
+        )
+    else:
+        st.markdown(
+            "The comparison summarizes how modeled water use and root-zone moisture changed between two periods. "
+            "It is useful as regional context, but it does not directly measure crop yields, irrigation demand, or the conditions of a particular field."
+        )
+
+    with st.expander("Read the result responsibly"):
+        st.markdown(
+            "A period-to-period percentage change is descriptive, while the trend test evaluates a monotonic pattern across the full selected time series. "
+            "A significant trend is not proof of cause. The FLDAS data are modeled and spatially averaged; check local observations before making field-level decisions. "
+            "The relative-demand index is an exploratory ratio, not a validated crop-stress threshold."
+        )
+
+st.subheader("Additional trend evidence")
 trend_rows = []
-for name, result in [
-    ("Evapotranspiration", mk_et),
-    ("Root-zone soil moisture", mk_sm),
-    ("Relative demand index", mk_stress),
+for name, result, unit in [
+    ("Evapotranspiration", mk_et, "mm/month per year"),
+    ("Root-zone soil moisture", mk_sm, "moisture units per year"),
+    ("Relative demand index", mk_stress, "index units per year"),
 ]:
     trend_rows.append(
         {
             "Indicator": name,
-            "Direction": result.trend.capitalize() if result else "Insufficient data/variation",
-            "Sen slope per year": f"{result.slope:+.5g}" if result else "N/A",
-            "p-value": f"{result.p:.4f}" if result else "N/A",
+            "Direction": trend_label(result),
+            "Sen slope": trend_slope(result, unit),
+            "p-value": trend_p(result),
             "Significant at p < 0.05": "Yes" if result and result.p < 0.05 else "No" if result else "N/A",
         }
     )
@@ -357,9 +482,9 @@ else:
                 {
                     "Zone": zone,
                     "Mean NDVI": f"{yearly['NDVI'].mean():.3f}",
-                    "Trend": result.trend.capitalize() if result else "Insufficient data/variation",
+                    "Trend": trend_label(result),
                     "Sen slope per year": f"{result.slope:+.5f}" if result else "N/A",
-                    "p-value": f"{result.p:.4f}" if result else "N/A",
+                    "p-value": trend_p(result),
                 }
             )
         ndvi_chart.update_layout(
@@ -369,8 +494,8 @@ else:
         st.plotly_chart(ndvi_chart, use_container_width=True)
         st.dataframe(pd.DataFrame(ndvi_rows), hide_index=True, use_container_width=True)
         st.caption(
-            "NDVI is a satellite-derived vegetation greenness measure. It is not a direct measure of crop yield, "
-            "and cross-sensor or crop-stage effects should be considered when interpreting changes."
+            "NDVI is a satellite-derived vegetation greenness measure, not a direct measure of crop yield. "
+            "Crop stage and sensor effects should be considered when interpreting changes."
         )
 
 st.caption(
