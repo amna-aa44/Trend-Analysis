@@ -24,3 +24,16 @@ For generations, farming families between the **River Ravi** and **Nullah Bein**
 3. **Seasonal Asymmetry (Two Opposite Risks):**
    * **Kharif (Jun–Sep Monsoon Rice):** Soil moisture rose significantly ($p < 0.05$) without proportional evapotranspiration gains—indicating episodic monsoon waterlogging rather than productive crop water use.
    * **Rabi (Nov–Apr Winter Wheat):** Soil moisture shows no statistically significant gain ($p \approx 0.05\text{–}0.07$), leaving winter wheat vulnerable to dry-season evaporative stress.
+   * ---
+
+## 🖼️ Visual Diagnostics
+
+### 1. 44-Year Hydro-Agricultural Trends & Coupling (1982–2025)
+![Shakargarh 44-Year Trends](Shakargarh_Research_Figure.png)
+
+### 2. Seasonal Soil Moisture–Evapotranspiration Coupling Curve
+![Seasonal Coupling Curve](Shakargarh_Coupling_Curve.png)
+
+### 3. Spatial Land–Atmosphere Coupling Across Shakargarh (NASA Giovanni)
+![Giovanni Spatial Correlation Map](Giovanni_Correlation_Map.png)
+
