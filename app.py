@@ -1,3 +1,4 @@
+import glob
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -8,10 +9,15 @@ from plotly.subplots import make_subplots
 
 st.set_page_config(page_title="Shakargarh Earth System Trend Detective", page_icon="🌍", layout="wide")
 
-# --- 1. DATA LOADER & PREPROCESSOR ---
+# --- 1. DATA LOADER & PREPROCESSOR (AUTO-DETECTS NASA GIOVANNI FILENAMES) ---
 @st.cache_data
 def load_data():
-    def read_giovanni(filepath, col_name):
+    def read_giovanni(pattern, col_name):
+        matches = glob.glob(pattern)
+        if not matches:
+            st.error(f"Missing CSV matching pattern: {pattern}")
+            st.stop()
+        filepath = matches[0]
         with open(filepath, 'r') as f:
             lines = f.readlines()
         skip = 0
@@ -25,9 +31,9 @@ def load_data():
         df_tmp[col_name] = pd.to_numeric(df_tmp[col_name], errors='coerce')
         return df_tmp.dropna()
 
-    et = read_giovanni('et.csv', 'ET_raw')
-    sm_surf = read_giovanni('sm_surface.csv', 'SM_0_10cm')
-    sm_root = read_giovanni('sm_root.csv', 'SM_10_40cm')
+    et = read_giovanni('*Evap_tavg*.csv', 'ET_raw')
+    sm_surf = read_giovanni('*SoilMoi00_10cm*.csv', 'SM_0_10cm')
+    sm_root = read_giovanni('*SoilMoi10_40cm*.csv', 'SM_10_40cm')
 
     merged = et.merge(sm_surf, on='Date').merge(sm_root, on='Date')
     merged['ET_mm_month'] = merged['ET_raw'] * 2592000
