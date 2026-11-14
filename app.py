@@ -38,7 +38,7 @@ def safe_mann_kendall(series):
         return EmptyMKResult()
 
 
-# --- 1. DATA LOADER & PREPROCESSOR (AUTO-DETECTS NASA GIOVANNI FILENAMES) ---
+# --- 1. DATA LOADER & PREPROCESSOR (AUTO-DETECTS NASA GIOVANNI & APPEEARS FILENAMES) ---
 @st.cache_data
 def load_data():
     def read_giovanni(pattern, col_name):
@@ -63,12 +63,8 @@ def load_data():
         if df_tmp.empty:
             raise ValueError(f"No data found in file: {filepath}")
 
-        if "Date" not in df_tmp.columns:
-            df_tmp = df_tmp.iloc[:, :2].copy()
-            df_tmp.columns = ["Date", col_name]
-        else:
-            df_tmp = df_tmp[[df_tmp.columns[0], df_tmp.columns[1]]].copy()
-            df_tmp.columns = ["Date", col_name]
+        df_tmp = df_tmp.iloc[:, :2].copy()
+        df_tmp.columns = ["Date", col_name]
 
         df_tmp["Date"] = pd.to_datetime(df_tmp["Date"], errors="coerce")
         df_tmp[col_name] = pd.to_numeric(df_tmp[col_name], errors="coerce")
@@ -93,11 +89,29 @@ def load_data():
     merged["Year"] = merged["Date"].dt.year
     merged["Month"] = merged["Date"].dt.month
 
-    return merged[merged["Year"] <= 2025].copy()
+    # Load NASA AppEEARS MODIS 1 km NDVI (MOD13A3.061)
+    ndvi_matches = sorted(glob.glob("*MOD13A3*.csv"))
+    ndvi_df = None
+    if ndvi_matches:
+        raw_ndvi = pd.read_csv(ndvi_matches[0], encoding="utf-8-sig")
+        ndvi_cols = [c for c in raw_ndvi.columns if "NDVI" in c and "Quality" not in c and "VI_" not in c]
+        if ndvi_cols and "Date" in raw_ndvi.columns:
+            ndvi_col = ndvi_cols[0]
+            raw_ndvi["Date"] = pd.to_datetime(raw_ndvi["Date"], errors="coerce")
+            raw_ndvi["NDVI"] = pd.to_numeric(raw_ndvi[ndvi_col], errors="coerce")
+            if raw_ndvi["NDVI"].max() > 1.5:
+                raw_ndvi["NDVI"] = raw_ndvi["NDVI"] * 0.0001
+            raw_ndvi = raw_ndvi.dropna(subset=["Date", "NDVI"])
+            raw_ndvi = raw_ndvi[(raw_ndvi["NDVI"] >= -0.2) & (raw_ndvi["NDVI"] <= 1.0)].copy()
+            raw_ndvi["Year"] = raw_ndvi["Date"].dt.year
+            raw_ndvi["Month"] = raw_ndvi["Date"].dt.month
+            ndvi_df = raw_ndvi[raw_ndvi["Year"] <= 2025].copy()
+
+    return merged[merged["Year"] <= 2025].copy(), ndvi_df
 
 
 try:
-    df_complete = load_data()
+    df_complete, df_ndvi = load_data()
 except Exception as exc:
     st.error(f"Data loading failed: {exc}")
     st.stop()
@@ -106,10 +120,10 @@ except Exception as exc:
 # --- 2. STORY-DRIVEN HEADER ---
 st.title("🌾 The story of Shakargarh's resources: Crop-Water stress in the past 4 decades")
 st.markdown(
-    """
-    **NASA 2026 Space Apps Challenge: *Be An Earth System Trend Detective!***
-    *For generations, farming families between the River Ravi and Nullah Bein have timed their sowing and harvesting to the rhythm of the seasons. Using 44 years of NASA satellite-assimilated data, we trace how rising atmospheric demand and changing soil moisture affect crop production in Shakargarh.*
-    """
+    "**NASA 2026 Space Apps Challenge: *Be An Earth System Trend Detective!***\n\n"
+    "*For generations, farming families between the River Ravi and Nullah Bein have timed their sowing and harvesting to the rhythm of the seasons. "
+    "Combining 44 years of NASA FLDAS hydrological records (`1982–2025`) with 26 years of 1 km Terra MODIS satellite crop greenness (`2000–2025`), "
+    "we trace how rising atmospheric demand and changing soil moisture affect crop production in Shakargarh.*"
 )
 
 
@@ -132,17 +146,20 @@ st.sidebar.caption(
 
 # --- 4. FILTER & COMPUTE STATISTICAL TRENDS ---
 if season == "Full Agricultural Year (Annual Mean)":
+    months_filter = list(range(1, 13))
     sub_m = df_complete.copy()
     crop_note = (
         "Over the past four decades, the air above Shakargarh has been exerting increasing evaporative demand, while soil moisture and crop stress conditions show persistent long-term change."
     )
 elif season == "Kharif Season (Jun–Sep: Monsoon & Rice)":
-    sub_m = df_complete[df_complete["Month"].isin([6, 7, 8, 9])].copy()
+    months_filter = [6, 7, 8, 9]
+    sub_m = df_complete[df_complete["Month"].isin(months_filter)].copy()
     crop_note = (
         "During the monsoon season, rainfall and soil moisture patterns are highly important, but crop water demand can still create stress when atmospheric demand outpaces the moisture available to root zones."
     )
 else:
-    sub_m = df_complete[df_complete["Month"].isin([11, 12, 1, 2, 3, 4])].copy()
+    months_filter = [11, 12, 1, 2, 3, 4]
+    sub_m = df_complete[df_complete["Month"].isin(months_filter)].copy()
     crop_note = (
         "Winter wheat is sensitive to soil moisture carryover and seasonal water balance, so changes in evaporative demand can significantly affect crop productivity during the Rabi season."
     )
@@ -170,11 +187,12 @@ if ann.empty:
 early = ann[ann["Year"] < split_year]
 late = ann[ann["Year"] >= split_year]
 
-# Safe percentage shift calculation
+
 def percent_shift(old_val, new_val):
     if pd.isna(old_val) or abs(old_val) < 1e-12:
         return 0.0
     return ((new_val - old_val) / old_val) * 100.0
+
 
 et_shift = percent_shift(early["ET_mm_month"].mean() if not early.empty else np.nan, late["ET_mm_month"].mean() if not late.empty else np.nan)
 sm_shift = percent_shift(early["SM_10_40cm"].mean() if not early.empty else np.nan, late["SM_10_40cm"].mean() if not late.empty else np.nan)
@@ -205,8 +223,12 @@ c4.metric(
     f"p = {p_corr:.2e}" if not pd.isna(p_corr) else "p = N/A",
 )
 
-# --- 6. TABS FOR CHARTS & LOCAL STORY ---
-tab1, tab2 = st.tabs(["📈 4-Decade Trends & Water Stress", "🌱 What This Means for Local Farmers"])
+# --- 6. TABS FOR CHARTS, MODIS NDVI & LOCAL STORY ---
+tab1, tab2, tab3 = st.tabs([
+    "📈 4-Decade Water Stress Trends",
+    "🛰️ 1 km Satellite Crop Greenness (MODIS NDVI)",
+    "🌱 What This Means for Local Farmers",
+])
 
 with tab1:
     fig = make_subplots(
@@ -221,142 +243,17 @@ with tab1:
         ),
     )
 
-    # Panel 1: ET
     fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=ann["ET_mm_month"],
-            mode="lines+markers",
-            name="Evapotranspiration",
-            line=dict(color="#c84b31", width=2),
-        ),
+        go.Scatter(x=ann["Year"], y=ann["ET_mm_month"], mode="lines+markers", name="Evapotranspiration", line=dict(color="#c84b31", width=2)),
         row=1,
         col=1,
     )
-    z_et = np.polyfit(ann["Year"], ann["ET_mm_month"], 1)
+    if len(ann) >= 2:
+        z_et = np.polyfit(ann["Year"], ann["ET_mm_month"], 1)
+        fig.add_trace(
+            go.Scatter(x=ann["Year"], y=np.poly1d(z_et)(ann["Year"]), mode="lines", line=dict(color="#6b1d0e", dash="dash")),
+            row=1,
+            col=1,
+        )
+
     fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=np.poly1d(z_et)(ann["Year"]),
-            mode="lines",
-            line=dict(color="#6b1d0e", dash="dash"),
-        ),
-        row=1,
-        col=1,
-    )
-
-    # Panel 2: Soil Moisture
-    fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=ann["SM_10_40cm"],
-            mode="lines+markers",
-            name="Root Soil Moisture",
-            line=dict(color="#005a9c", width=2),
-        ),
-        row=2,
-        col=1,
-    )
-    z_sm = np.polyfit(ann["Year"], ann["SM_10_40cm"], 1)
-    fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=np.poly1d(z_sm)(ann["Year"]),
-            mode="lines",
-            line=dict(color="#002b49", dash="dash"),
-        ),
-        row=2,
-        col=1,
-    )
-
-    # Panel 3: Crop-Water Stress Index
-    fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=ann["Aridity_Stress_Idx"],
-            mode="lines+markers",
-            name="Crop-Water Stress Index",
-            line=dict(color="#d97706", width=2),
-        ),
-        row=3,
-        col=1,
-    )
-    z_ar = np.polyfit(ann["Year"], ann["Aridity_Stress_Idx"], 1)
-    fig.add_trace(
-        go.Scatter(
-            x=ann["Year"],
-            y=np.poly1d(z_ar)(ann["Year"]),
-            mode="lines",
-            line=dict(color="#78350f", dash="dash"),
-        ),
-        row=3,
-        col=1,
-    )
-
-    fig.add_vline(x=split_year, line_width=1.5, line_dash="dot", line_color="green")
-    fig.update_layout(height=740, template="plotly_white", showlegend=False, margin=dict(t=45, b=30))
-    st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Statistical Evidence (Autocorrelation-Corrected Mann-Kendall Test)")
-    summary_df = pd.DataFrame(
-        {
-            "Resource Indicator": [
-                "Evapotranspiration (Crop & Soil Water Use)",
-                "Root-Zone Soil Moisture (10–40 cm)",
-                "Crop-Water Stress Index",
-            ],
-            "44-Year Direction": [
-                mk_et.trend.capitalize(),
-                mk_sm.trend.capitalize(),
-                mk_ar.trend.capitalize(),
-            ],
-            "Annual Rate of Change": [
-                f"{mk_et.slope:+.4f} mm/mo",
-                f"{mk_sm.slope:+.5f} m³/m³",
-                f"{mk_ar.slope:+.5f} /yr",
-            ],
-            "p-value": [
-                f"{mk_et.p:.4f}",
-                f"{mk_sm.p:.4f}",
-                f"{mk_ar.p:.4f}",
-            ],
-            "Statistically Proven (p < 0.05)": [
-                "Yes" if mk_et.p < 0.05 else "No (High Year-to-Year Swing)",
-                "Yes" if mk_sm.p < 0.05 else "No (High Year-to-Year Swing)",
-                "Yes" if mk_ar.p < 0.05 else "No (High Year-to-Year Swing)",
-            ],
-            f"Change After {split_year}": [
-                f"{et_shift:+.2f}%",
-                f"{sm_shift:+.2f}%",
-                f"{ar_shift:+.2f}%",
-            ],
-        }
-    )
-    st.table(summary_df)
-
-with tab2:
-    st.markdown(
-        """
-        ### Reading Between the Lines: Two Seasons, Two Opposite Risks
-        1. **Too Much Water at Once in Summer (Kharif):** In seasons with strong monsoon rainfall, soil moisture can rise quickly, but excess water may not translate into better crop growth if the soil becomes saturated or if drainage and timing do not match crop demand.
-        2. **Winter Scarcity in Rabi (Dry Season):** Wheat and other winter crops depend on preserved soil moisture and irrigation. If atmospheric demand rises faster than the soil can supply water, crop stress intensifies even when total annual moisture seems sufficient.
-
-        In practical terms, Shakargarh's farmers face a dual challenge: managing flood-like monsoon pulses in summer while protecting crops from persistent evaporative stress during the dry season.
-        """
-    )
-
-    st.markdown("### Local Interpretation")
-    st.write(
-        "These signals are relevant to local farmers because they describe how available water is distributed across the year. In hot and dry periods, water demand can exceed what the root zone can provide, reducing crop resilience and raising the risk of lower yields."
-    )
-
-    st.caption("Dataset note: This analysis uses NASA Giovanni monthly time series and compares long-term trends before and after the selected year.")
-
-
-# Prevent Streamlit from re-running the entire app on every interaction in ways that can break file loading
-# (This is already managed by caching and the use of sidebar controls.)
-"""
-This file is intended to run as a Streamlit app.
-Run with:
-    streamlit run app.py
-"""
