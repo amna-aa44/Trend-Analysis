@@ -1,4 +1,5 @@
-import glob
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -7,172 +8,345 @@ import streamlit as st
 from plotly.subplots import make_subplots
 from scipy.stats import pearsonr
 
-st.set_page_config(page_title="The story of Shakargarh's resources: Crop-Water stress in the past 4 decades", page_icon="🌾", layout="wide")
-
-
-def safe_mk(series):
-    s = pd.Series(series).dropna()
-    if len(s) < 3:
-        return type("MK", (), {"p": 1.0, "slope": 0.0, "trend": "no trend"})()
-    try:
-        return mk.hamed_rao_modification_test(s)
-    except Exception:
-        return type("MK", (), {"p": 1.0, "slope": 0.0, "trend": "no trend"})()
-
-
-@st.cache_data
-def load_data():
-    def read_giovanni(pattern, col_name):
-        matches = sorted(glob.glob(pattern))
-        if not matches:
-            st.error(f"Missing CSV file matching: {pattern}")
-            st.stop()
-        with open(matches, "r", encoding="utf-8-sig", newline="") as f:
-            lines = f.readlines()
-        skip = 0
-        for i, line in enumerate(lines):
-            s = line.strip()
-            if s.lower().startswith("time") or (len(s) >= 4 and s[:4].isdigit()):
-                skip = i if s.lower().startswith("time") else max(0, i - 1)
-                break
-        df_t = pd.read_csv(matches, skiprows=skip).iloc[:, :2].copy()
-        df_t.columns = ["Date", col_name]
-        df_t["Date"] = pd.to_datetime(df_t["Date"], errors="coerce")
-        df_t[col_name] = pd.to_numeric(df_t[col_name], errors="coerce")
-        return df_t.dropna().reset_index(drop=True)
-
-    et = read_giovanni("*Evap_tavg*.csv", "ET_raw")
-    sm_s = read_giovanni("*SoilMoi00_10cm*.csv", "SM_0_10cm")
-    sm_r = read_giovanni("*SoilMoi10_40cm*.csv", "SM_10_40cm")
-
-    m = et.merge(sm_s, on="Date").merge(sm_r, on="Date")
-    m["ET_mm_month"] = m["ET_raw"] * 2592000.0
-    m["Aridity_Stress_Idx"] = m["ET_mm_month"] / (m["SM_10_40cm"] * 300.0)
-    m["Year"] = m["Date"].dt.year
-    m["Month"] = m["Date"].dt.month
-
-    ndvi_files = sorted(glob.glob("*MOD13A3*.csv"))
-    ndvi_df = None
-    if ndvi_files:
-        raw = pd.read_csv(ndvi_files, encoding="utf-8-sig")
-        cols = [c for c in raw.columns if "NDVI" in c and "Quality" not in c and "VI_" not in c]
-        if cols and "Date" in raw.columns:
-            raw["Date"] = pd.to_datetime(raw["Date"], errors="coerce")
-            raw["NDVI"] = pd.to_numeric(raw[cols], errors="coerce")
-            if raw["NDVI"].max() > 1.5:
-                raw["NDVI"] *= 0.0001
-            raw = raw.dropna(subset=["Date", "NDVI"])
-            raw = raw[(raw["NDVI"] >= -0.2) & (raw["NDVI"] <= 1.0)].copy()
-            raw["Year"] = raw["Date"].dt.year
-            raw["Month"] = raw["Date"].dt.month
-            ndvi_df = raw[raw["Year"] <= 2025].copy()
-
-    return m[m["Year"] <= 2025].copy(), ndvi_df
-
-
-df_complete, df_ndvi = load_data()
-
-st.title("🌾 The story of Shakargarh's resources: Crop-Water stress in the past 4 decades")
-st.markdown(
-    "**NASA 2026 Space Apps Challenge: *Be An Earth System Trend Detective!***\n\n"
-    "*For generations, farming families between the River Ravi and Nullah Bein have timed their sowing and harvesting to the rhythm of the seasons. "
-    "Combining 44 years of NASA FLDAS hydrological records (`1982–2025`) with 26 years of 1 km Terra MODIS satellite crop greenness (`2000–2025`), "
-    "we trace how rising atmospheric demand and changing soil moisture affect crop production in Shakargarh.*"
+st.set_page_config(
+    page_title="Shakargarh Crop–Water Trends",
+    page_icon="🌾",
+    layout="wide",
 )
 
-st.sidebar.header("🧭 Explore Shakargarh's Seasons")
-season = st.sidebar.selectbox(
-    "1. Choose a Farming Season",
-    ["Full Agricultural Year (Annual Mean)", "Kharif Season (Jun–Sep: Monsoon & Rice)", "Rabi Season (Nov–Apr: Winter Wheat)"]
-)
-split_year = st.sidebar.slider("2. Compare Before vs. After Year", 1995, 2015, 2004)
-st.sidebar.markdown("---")
-st.sidebar.caption("**Why this matters:** Faster evaporation under warmer skies can leave crops thirstier during dry months—a pattern known as progressive aridification.")
+DATA_DIR = Path(__file__).resolve().parent
+MAX_YEAR = 2025
+SEASON_OPTIONS = [
+    "Full Agricultural Year (Annual Mean)",
+    "Kharif Season (Jun–Sep: Monsoon & Rice)",
+    "Rabi Season (Nov–Apr: Winter Wheat)",
+]
 
-if season == "Full Agricultural Year (Annual Mean)":
-    months_filter = list(range(1, 13))
-    note = "Over the past four decades, atmospheric water pull has risen 18.52% (p ≈ 0.01), slightly outpacing root-zone soil moisture gains (+17.95%, p ≈ 0.04)."
-elif season == "Kharif Season (Jun–Sep: Monsoon & Rice)":
-    months_filter =
-    note = "During the summer monsoon, root-zone soil moisture rises significantly (p < 0.05), yet crop evapotranspiration levels off—showing excess water often waterlogs paddy fields."
-else:
-    months_filter =
-    note = "Winter wheat shows no statistically significant soil moisture gain (p > 0.05) over 44 years, leaving Rabi crops sensitive to dry-season evaporative stress."
 
-sub_m = df_complete[df_complete["Month"].isin(months_filter)].copy()
-ann = sub_m.groupby("Year", as_index=False).mean(numeric_only=True)
+def read_giovanni(pattern: str, column_name: str) -> pd.DataFrame:
+    """Load a Giovanni CSV that has a metadata preamble and a time-series table."""
+    matches = sorted(DATA_DIR.glob(pattern))
+    if not matches:
+        raise FileNotFoundError(f"Missing CSV matching {pattern!r} in {DATA_DIR}")
 
-mk_et = safe_mk(ann["ET_mm_month"])
-mk_sm = safe_mk(ann["SM_10_40cm"])
-mk_ar = safe_mk(ann["Aridity_Stress_Idx"])
-r_val, p_corr = pearsonr(sub_m["SM_10_40cm"], sub_m["ET_mm_month"])
+    path = matches[0]
+    with path.open("r", encoding="utf-8-sig", newline="") as source:
+        lines = source.readlines()
 
-early, late = ann[ann["Year"] < split_year], ann[ann["Year"] >= split_year]
-et_shift = ((late["ET_mm_month"].mean() - early["ET_mm_month"].mean()) / early["ET_mm_month"].mean()) * 100.0
-sm_shift = ((late["SM_10_40cm"].mean() - early["SM_10_40cm"].mean()) / early["SM_10_40cm"].mean()) * 100.0
-ar_shift = ((late["Aridity_Stress_Idx"].mean() - early["Aridity_Stress_Idx"].mean()) / early["Aridity_Stress_Idx"].mean()) * 100.0
-
-st.info(f"**What the data tells us ({season}):** {note}")
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Crop Water Demand (ET)", f"{et_shift:+.2f}%", f"p = {mk_et.p:.4f}")
-c2.metric("Root-Zone Soil Water (10–40 cm)", f"{sm_shift:+.2f}%", f"p = {mk_sm.p:.4f}")
-c3.metric("Crop-Water Stress Ratio", f"{ar_shift:+.2f}%", f"Slope: {mk_ar.slope:+.5f}/yr")
-c4.metric("Soil-to-Crop Link (r)", f"{r_val:.3f}", f"p = {p_corr:.2e}")
-
-tab1, tab2, tab3 = st.tabs(["📈 4-Decade Water Stress Trends", "🛰️ 1 km Satellite Crop Greenness (MODIS NDVI)", "🌱 What This Means for Local Farmers"])
-
-with tab1:
-    fig = make_subplots(
-        rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.08,
-        subplot_titles=(
-            f"1. Crop & Soil Water Loss (ET, mm/mo) | Change: {mk_et.slope:+.4f}/yr (p = {mk_et.p:.4f})",
-            f"2. Root-Zone Soil Moisture (10–40 cm, m³/m³) | Change: {mk_sm.slope:+.5f}/yr (p = {mk_sm.p:.4f})",
-            f"3. Crop-Water Stress Index | Change: {mk_ar.slope:+.5f}/yr (p = {mk_ar.p:.4f})",
-        ),
+    header_row = next(
+        (i for i, line in enumerate(lines) if line.strip().lower().startswith("time,")),
+        None,
     )
-    specs = [("ET_mm_month", "#c84b31", "#6b1d0e"), ("SM_10_40cm", "#005a9c", "#002b49"), ("Aridity_Stress_Idx", "#d97706", "#78350f")]
-    for idx, (col, c_line, c_dash) in enumerate(specs, start=1):
-        fig.add_trace(go.Scatter(x=ann["Year"], y=ann[col], mode="lines+markers", line=dict(color=c_line, width=2)), row=idx, col=1)
-        z = np.polyfit(ann["Year"], ann[col], 1)
-        fig.add_trace(go.Scatter(x=ann["Year"], y=np.poly1d(z)(ann["Year"]), mode="lines", line=dict(color=c_dash, dash="dash")), row=idx, col=1)
+    if header_row is None:
+        raise ValueError(f"Could not find the Giovanni time-series header in {path.name}")
 
-    fig.add_vline(x=split_year, line_width=1.5, line_dash="dot", line_color="green")
-    fig.update_layout(height=740, template="plotly_white", showlegend=False, margin=dict(t=45, b=30))
-    st.plotly_chart(fig, use_container_width=True)
+    frame = pd.read_csv(path, skiprows=header_row)
+    if frame.shape[1] < 2:
+        raise ValueError(f"Expected date and value columns in {path.name}")
 
-    st.subheader("Statistical Evidence (Autocorrelation-Corrected Mann-Kendall Test)")
-    st.table(pd.DataFrame({
-        "Resource Indicator": ["Evapotranspiration (Crop & Soil Water Use)", "Root-Zone Soil Moisture (10–40 cm)", "Crop-Water Stress Index"],
-        "44-Year Direction": [mk_et.trend.capitalize(), mk_sm.trend.capitalize(), mk_ar.trend.capitalize()],
-        "Annual Rate": [f"{mk_et.slope:+.4f} mm/mo", f"{mk_sm.slope:+.5f} m³/m³", f"{mk_ar.slope:+.5f} /yr"],
-        "p-value": [f"{mk_et.p:.4f}", f"{mk_sm.p:.4f}", f"{mk_ar.p:.4f}"],
-        "Proven (p < 0.05)": ["Yes" if mk_et.p < 0.05 else "No", "Yes" if mk_sm.p < 0.05 else "No", "Yes" if mk_ar.p < 0.05 else "No"],
-        f"After {split_year}": [f"{et_shift:+.2f}%", f"{sm_shift:+.2f}%", f"{ar_shift:+.2f}%"],
-    }))
+    frame = frame.iloc[:, :2].copy()
+    frame.columns = ["Date", column_name]
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame[column_name] = pd.to_numeric(frame[column_name], errors="coerce")
+    frame[column_name] = frame[column_name].replace([-9999, -9999.0], np.nan)
+    return frame.dropna(subset=["Date", column_name]).drop_duplicates("Date")
 
-with tab2:
-    if df_ndvi is None or df_ndvi.empty:
-        st.info("Upload your NASA AppEEARS `MOD13A3` CSV file to activate 1 km satellite crop greenness trends.")
+
+def read_ndvi() -> pd.DataFrame | None:
+    """Load optional MODIS NDVI CSV if the repository contains one."""
+    matches = sorted(DATA_DIR.glob("*MOD13A3*.csv"))
+    if not matches:
+        return None
+
+    raw = pd.read_csv(matches[0], encoding="utf-8-sig")
+    date_column = next((c for c in raw.columns if c.strip().lower() == "date"), None)
+    ndvi_column = next(
+        (
+            c for c in raw.columns
+            if "NDVI" in c and "Quality" not in c and "VI_Quality" not in c
+        ),
+        None,
+    )
+    if date_column is None or ndvi_column is None:
+        return None
+
+    result = raw.copy()
+    result["Date"] = pd.to_datetime(result[date_column], errors="coerce")
+    result["NDVI"] = pd.to_numeric(result[ndvi_column], errors="coerce")
+    # MOD13A3 NDVI is often stored as a scaled integer; leave already-scaled
+    # values unchanged and convert values in the documented integer range.
+    if result["NDVI"].max(skipna=True) > 1.5:
+        result["NDVI"] = result["NDVI"] * 0.0001
+    result = result.dropna(subset=["Date", "NDVI"])
+    result = result[result["NDVI"].between(-0.2, 1.0)].copy()
+    result["Year"] = result["Date"].dt.year
+    result["Month"] = result["Date"].dt.month
+    if "ID" not in result.columns:
+        result["ID"] = result["Category"] if "Category" in result.columns else "Shakargarh"
+    return result[result["Year"] <= MAX_YEAR].copy()
+
+
+@st.cache_data(show_spinner="Loading NASA Giovanni datasets…")
+def load_data():
+    et = read_giovanni("*Evap_tavg*.csv", "ET_raw")
+    surface = read_giovanni("*SoilMoi00_10cm*.csv", "SM_0_10cm")
+    root = read_giovanni("*SoilMoi10_40cm*.csv", "SM_10_40cm")
+
+    water = et.merge(surface, on="Date", how="inner").merge(root, on="Date", how="inner")
+    if water.empty:
+        raise ValueError("The ET and soil-moisture CSV files have no dates in common.")
+
+    # Convert the Giovanni monthly mean flux to monthly depth using each
+    # calendar month's actual duration.
+    seconds_per_month = water["Date"].dt.days_in_month * 24 * 60 * 60
+    water["ET_mm_month"] = water["ET_raw"] * seconds_per_month
+    water["Aridity_Stress_Idx"] = np.where(
+        water["SM_10_40cm"] > 0,
+        water["ET_mm_month"] / (water["SM_10_40cm"] * 300.0),
+        np.nan,
+    )
+    water["Year"] = water["Date"].dt.year
+    water["Month"] = water["Date"].dt.month
+    water = water[water["Year"] <= MAX_YEAR].copy()
+    return water, read_ndvi()
+
+
+def safe_mann_kendall(series):
+    values = pd.Series(series).dropna()
+    if len(values) < 3 or values.nunique() < 2:
+        return None
+    try:
+        return mk.hamed_rao_modification_test(values.to_numpy())
+    except (ValueError, ZeroDivisionError, FloatingPointError):
+        return None
+
+
+def safe_correlation(frame, x_column, y_column):
+    pair = frame[[x_column, y_column]].dropna()
+    if len(pair) < 2 or pair[x_column].nunique() < 2 or pair[y_column].nunique() < 2:
+        return np.nan, np.nan
+    return pearsonr(pair[x_column], pair[y_column])
+
+
+def percent_change(before, after):
+    if pd.isna(before) or pd.isna(after) or np.isclose(before, 0):
+        return np.nan
+    return (after - before) / before * 100.0
+
+
+def format_change(value):
+    return f"{value:+.2f}%" if pd.notna(value) else "N/A"
+
+
+st.title("🌾 Shakargarh’s crop–water story")
+st.markdown(
+    """**Seasonal water demand, root-zone moisture, and satellite crop greenness**
+
+    Explore NASA FLDAS monthly estimates for Shakargarh, with optional Terra MODIS NDVI observations. "
+    "These are modeled and area-averaged indicators—not direct measurements of crop yield or "
+    "conditions on an individual farm."""
+)
+
+with st.sidebar:
+    st.header("🧭 Explore Shakargarh’s seasons")
+    season = st.selectbox("Choose a farming season", SEASON_OPTIONS)
+    split_year = st.slider("Compare periods at year", 1995, 2015, 2004)
+    st.caption("Rabi runs November–April and is grouped by the year in which the season ends.")
+
+try:
+    df_complete, df_ndvi = load_data()
+except (FileNotFoundError, ValueError, OSError, pd.errors.ParserError) as error:
+    st.error(f"The app could not load its data: {error}")
+    st.info("Keep the three FLDAS Giovanni CSV files in the same repository folder as app.py.")
+    st.stop()
+
+if df_complete.empty:
+    st.error(f"No valid FLDAS observations are available through {MAX_YEAR}.")
+    st.stop()
+
+if season == SEASON_OPTIONS[0]:
+    months_filter = list(range(1, 13))
+    selected = df_complete.copy()
+    selected["SeasonYear"] = selected["Year"]
+    note = "Annual averages summarize all available months in each calendar year."
+elif season == SEASON_OPTIONS[1]:
+    months_filter = [6, 7, 8, 9]
+    selected = df_complete[df_complete["Month"].isin(months_filter)].copy()
+    selected["SeasonYear"] = selected["Year"]
+    note = "Kharif summarizes June–September observations by calendar year."
+else:
+    months_filter = [11, 12, 1, 2, 3, 4]
+    selected = df_complete[df_complete["Month"].isin(months_filter)].copy()
+    # A Rabi season crosses the calendar-year boundary; Nov/Dec belong to the
+    # season ending in the following year.
+    selected["SeasonYear"] = selected["Year"] + selected["Month"].isin([11, 12]).astype(int)
+    note = "Rabi summarizes November–April, grouped by the year in which the season ends."
+
+if selected.empty:
+    st.warning("No observations are available for the selected season.")
+    st.stop()
+
+annual = (
+    selected.groupby("SeasonYear")[["ET_mm_month", "SM_10_40cm", "Aridity_Stress_Idx"]]
+    .mean()
+    .reset_index()
+    .rename(columns={"SeasonYear": "Year"})
+)
+if annual.empty:
+    st.warning("No annual or seasonal summary data could be calculated.")
+    st.stop()
+
+before = annual[annual["Year"] < split_year]
+after = annual[annual["Year"] >= split_year]
+
+def group_mean(frame, column):
+    return frame[column].mean() if not frame.empty else np.nan
+
+et_change = percent_change(group_mean(before, "ET_mm_month"), group_mean(after, "ET_mm_month"))
+sm_change = percent_change(group_mean(before, "SM_10_40cm"), group_mean(after, "SM_10_40cm"))
+stress_change = percent_change(
+    group_mean(before, "Aridity_Stress_Idx"), group_mean(after, "Aridity_Stress_Idx")
+)
+
+mk_et = safe_mann_kendall(annual["ET_mm_month"])
+mk_sm = safe_mann_kendall(annual["SM_10_40cm"])
+mk_ar = safe_mann_kendall(annual["Aridity_Stress_Idx"])
+r_value, p_value = safe_correlation(selected, "SM_10_40cm", "ET_mm_month")
+
+st.caption(note)
+if before.empty or after.empty:
+    st.warning("One comparison period is empty for this year selection; percentage changes appear as N/A.")
+st.subheader("At a glance")
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Evapotranspiration shift", format_change(et_change))
+c2.metric("Root-zone soil moisture shift", format_change(sm_change))
+c3.metric("Relative demand index shift", format_change(stress_change))
+c4.metric(
+    "Soil moisture ↔ ET correlation",
+    f"r = {r_value:.3f}" if pd.notna(r_value) else "N/A",
+    f"Pearson p = {p_value:.2e}" if pd.notna(p_value) else None,
+)
+st.info(f"**Selected view ({season}):** {note}")
+
+with st.expander("Indicator notes and limitations"):
+    st.markdown(
+        """- **ET:** Monthly evapotranspiration depth derived from FLDAS mean flux and actual month length.
+        - **Root-zone moisture:** FLDAS soil moisture for the 10–40 cm layer.
+        - **Relative demand index:** An exploratory ET-to-moisture ratio, not a validated crop-stress or drought index.
+        - **Trend test:** Hamed–Rao modified Mann–Kendall on annual/seasonal means. Significance does not establish cause or predict future conditions."""
+    )
+
+with st.container(border=True):
+    st.subheader("📈 Four-decade water trends")
+    if len(annual) < 2:
+        st.info("At least two years of data are needed to draw trend lines.")
     else:
-        st.subheader("26-Year Satellite Crop Greenness Across Shakargarh's Agricultural Zones (2000–2025)")
-        ndvi_sub = df_ndvi[df_ndvi["Month"].isin(months_filter)].copy()
-        id_col = "ID" if "ID" in ndvi_sub.columns else ("Category" if "Category" in ndvi_sub.columns else None)
-        fig_n = go.Figure()
-        colors = ["#1b9e77", "#7570b3", "#e7298a"]
-        rows_list = []
-        if id_col:
-            for idx, (z_name, grp) in enumerate(ndvi_sub.groupby(id_col)):
-                ann_z = grp.groupby("Year", as_index=False)["NDVI"].mean()
-                mk_z = safe_mk(ann_z["NDVI"])
-                fig_n.add_trace(go.Scatter(x=ann_z["Year"], y=ann_z["NDVI"], mode="lines+markers", name=f"{z_name} (p={mk_z.p:.3f})", line=dict(color=colors[idx % 3], width=2.2)))
-                rows_list.append([z_name, f"{ann_z['NDVI'].mean():.3f}", mk_z.trend.capitalize(), f"{mk_z.slope:+.5f}/yr", f"{mk_z.p:.4f}", "Yes" if mk_z.p < 0.05 else "No"])
-        fig_n.update_layout(height=430, template="plotly_white", yaxis_title="Crop Greenness Index (NDVI)", xaxis_title="Year", legend=dict(orientation="h", y=1.12))
-        st.plotly_chart(fig_n, use_container_width=True)
-        if rows_list:
-            st.table(pd.DataFrame(rows_list, columns=["Shakargarh Zone", "Mean NDVI", "26-Yr Trend", "Annual Slope", "p-value", "Proven (p < 0.05)"]))
+        fig = make_subplots(
+            rows=3,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.08,
+            subplot_titles=(
+                "Evapotranspiration (mm/month)",
+                "Root-zone soil moisture (10–40 cm)",
+                "Relative demand index (exploratory)",
+            ),
+        )
+        chart_series = [
+            ("ET_mm_month", "#c84b31", "#6b1d0e"),
+            ("SM_10_40cm", "#005a9c", "#002b49"),
+            ("Aridity_Stress_Idx", "#d97706", "#78350f"),
+        ]
+        for row, (column, line_color, trend_color) in enumerate(chart_series, start=1):
+            points = annual[["Year", column]].dropna()
+            fig.add_trace(
+                go.Scatter(x=points["Year"], y=points[column], mode="lines+markers", line={"color": line_color}),
+                row=row,
+                col=1,
+            )
+            if len(points) >= 2:
+                slope, intercept = np.polyfit(points["Year"], points[column], 1)
+                fig.add_trace(
+                    go.Scatter(
+                        x=points["Year"],
+                        y=slope * points["Year"] + intercept,
+                        mode="lines",
+                        line={"color": trend_color, "dash": "dash"},
+                    ),
+                    row=row,
+                    col=1,
+                )
+        fig.add_vline(x=split_year, line_width=1.5, line_dash="dot", line_color="green")
+        fig.update_layout(height=740, template="plotly_white", showlegend=False, hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
 
-        ndvi_mean = ndvi_sub.groupby(["Year", "Month"], as_index=False)["NDVI"].mean()
-        hc = sub_m.merge(ndvi_mean, on=["Year", "Month"]).dropna(subset=["SM_10_40cm", "NDVI"])
-        if len(hc) >= 3:
-            r_n, p_n = pearsonr(hc["SM_10_40cm"], hc["NDVI"])
+    st.subheader("Statistical evidence")
+    trend_rows = []
+    for name, result in [
+        ("Evapotranspiration", mk_et),
+        ("Root-zone soil moisture", mk_sm),
+        ("Relative demand index", mk_ar),
+    ]:
+        trend_rows.append(
+            {
+                "Indicator": name,
+                "Direction": result.trend.capitalize() if result else "Not enough variation/data",
+                "Sen slope": f"{result.slope:+.5g}" if result else "N/A",
+                "p-value": f"{result.p:.4f}" if result else "N/A",
+                "Significant (p < 0.05)": "Yes" if result and result.p < 0.05 else "No" if result else "N/A",
+            }
+        )
+    st.dataframe(pd.DataFrame(trend_rows), hide_index=True, use_container_width=True)
+
+with st.container(border=True):
+    st.subheader("🛰️ MODIS satellite crop greenness (NDVI)")
+    if df_ndvi is None or df_ndvi.empty:
+        st.info("No readable MOD13A3 NDVI CSV was found. Water-trend analysis works without it.")
+    else:
+        ndvi_selected = df_ndvi[df_ndvi["Month"].isin(months_filter)].copy()
+        if ndvi_selected.empty:
+            st.info("The NDVI file has no records for the selected months.")
+        else:
+            ndvi_chart = go.Figure()
+            ndvi_rows = []
+            for zone, group in ndvi_selected.groupby("ID"):
+                yearly = group.groupby("Year", as_index=False)["NDVI"].mean()
+                result = safe_mann_kendall(yearly["NDVI"])
+                ndvi_chart.add_trace(
+                    go.Scatter(x=yearly["Year"], y=yearly["NDVI"], mode="lines+markers", name=str(zone))
+                )
+                ndvi_rows.append(
+                    {
+                        "Zone": zone,
+                        "Mean NDVI": f"{yearly['NDVI'].mean():.3f}",
+                        "Trend": result.trend.capitalize() if result else "Not enough variation/data",
+                        "Slope/year": f"{result.slope:+.5f}" if result else "N/A",
+                        "p-value": f"{result.p:.4f}" if result else "N/A",
+                    }
+                )
+            ndvi_chart.update_layout(
+                height=430,
+                template="plotly_white",
+                yaxis_title="NDVI",
+                xaxis_title="Year",
+                hovermode="x unified",
+            )
+            st.plotly_chart(ndvi_chart, use_container_width=True)
+            st.dataframe(pd.DataFrame(ndvi_rows), hide_index=True, use_container_width=True)
+
+            ndvi_monthly = ndvi_selected.groupby(["Year", "Month"], as_index=False)["NDVI"].mean()
+            water_ndvi = selected.merge(ndvi_monthly, on=["Year", "Month"], how="inner")
+            r_ndvi, p_ndvi = safe_correlation(water_ndvi, "SM_10_40cm", "NDVI")
+            if pd.notna(r_ndvi):
+                st.write(f"Monthly root-zone moisture vs. NDVI: r = {r_ndvi:.3f}, p = {p_ndvi:.2e}")
+
+st.subheader("🌱 What this means for local farming")
+st.markdown(
+    """Season-by-season comparisons can help identify when modeled water demand and root-zone moisture move together or diverge. Kharif monsoon months and the drier Rabi growing season have different water-management contexts.
+
+    Use these regional results as context, not field-level advice: the dashboard does not include rainfall, irrigation, crop yields, or on-farm measurements. Local observations and farmer experience are essential for interpreting trends."""
+)
+st.caption(
+    f"Source: NASA Giovanni FLDAS monthly area-average time series. Analysis through {MAX_YEAR}; "
+    "MODIS NDVI is displayed when a compatible file is present."
+)
