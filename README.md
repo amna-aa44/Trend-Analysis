@@ -25,8 +25,8 @@ For generations, farming families between the **River Ravi** and **Nullah Bein**
 1. **Accelerating Evaporative Demand:** Mean annual evapotranspiration increased by **+18.52%** (`63.43 → 75.18 mm/month`, Sen's slope `+0.45 mm/mo/yr`, **$p \approx 0.01$**), outpacing root-zone soil moisture gains (**+17.95%**, **$p \approx 0.04$**).
 2. **Tight Water-Limited Coupling:** Root-zone soil moisture strongly governs crop evapotranspiration (**$r = 0.81, p < 0.0001$**), while spatial correlation maps highlight local hydrological buffering along the **Nullah Bein–River Ravi** irrigation corridor ($r \approx 0.64\text{–}0.80$) compared to strictly water-limited outer farmland ($r > 0.80$).
 3. **Seasonal Asymmetry (Two Opposite Risks):**
-   **Kharif (Jun–Sep Monsoon Rice):** Soil moisture rose significantly ($p < 0.05$) without proportional evapotranspiration gains—indicating episodic monsoon waterlogging rather than productive crop water use.
-   **Rabi (Nov–Apr Winter Wheat):** Soil moisture shows no statistically significant gain ($p \approx 0.05\text{–}0.07$), leaving winter wheat vulnerable to dry-season evaporative stress.
+   * **Kharif (Jun–Sep Monsoon Rice):** Soil moisture rose significantly ($p < 0.05$) without proportional evapotranspiration gains—indicating episodic monsoon waterlogging rather than productive crop water use.
+   * **Rabi (Nov–Apr Winter Wheat):** Soil moisture shows no statistically significant gain ($p \approx 0.05\text{–}0.07$), leaving winter wheat vulnerable to dry-season evaporative stress.
    * ---
 
 ## Visual Diagnostics
