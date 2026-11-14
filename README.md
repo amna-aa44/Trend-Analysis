@@ -32,7 +32,7 @@ For generations, farming families between the **River Ravi** and **Nullah Bein**
 ![Shakargarh 44-Year Trends](Shakargarh_Research_Figure.png)
 
 ### 2. Seasonal Soil Moisture–Evapotranspiration Coupling Curve
-![Seasonal Coupling Curve](Shakargarh_Coupling_Curve.png)
+![Seasonal Coupling Curve](download.png)
 
 ### 3. Spatial Land–Atmosphere Coupling Across Shakargarh (NASA Giovanni)
 ![Giovanni Spatial Correlation Map](Giovanni_Correlation_Map.png)
