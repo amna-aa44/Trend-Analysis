@@ -1,3 +1,4 @@
+[Cover Slide](cover.png)
 # 🌾 The story of Shakargarh's resources: Crop-Water stress in the past 4 decades
 
 **NASA Space Apps Challenge — *Be An Earth System Trend Detective!***  
