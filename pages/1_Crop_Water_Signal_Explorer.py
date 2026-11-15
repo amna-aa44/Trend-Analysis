@@ -230,6 +230,38 @@ fig.update_yaxes(title_text="FLDAS units", row=2, col=1)
 fig.update_yaxes(title_text="NDVI", row=3, col=1)
 st.plotly_chart(fig, use_container_width=True)
 
+st.subheader("How these graphics relate to crop-water stress")
+explain_et, explain_moisture, explain_ndvi = st.columns(3)
+with explain_et:
+    st.markdown("#### 1. Atmospheric water demand")
+    st.markdown(
+        "ET estimates water transferred from land to the atmosphere. Higher ET can indicate stronger "
+        "evaporative demand and, when crops are actively growing, potentially greater water use. ET alone "
+        "does **not** show whether crops are stressed: adequate water supply can support high ET, while "
+        "severe water limitation can suppress it."
+    )
+with explain_moisture:
+    st.markdown("#### 2. Root-zone water supply")
+    st.markdown(
+        "FLDAS moisture at 10–40 cm gives regional context for water stored below the surface. A decline "
+        "alongside sustained or rising ET may be a reason to investigate possible supply–demand pressure. "
+        "It is a modeled area average, not a measurement of water available to a particular crop or zone."
+    )
+with explain_ndvi:
+    st.markdown("#### 3. Vegetation response context")
+    st.markdown(
+        "NDVI tracks canopy greenness. A coincident NDVI decline can provide a vegetation signal to "
+        "investigate alongside water indicators, but it is not specific to water stress: crop stage, harvest, "
+        "land cover, pests, and data quality can also affect greenness. The plotted zone samples are nominal "
+        "1-km MODIS observations, not field-scale maps."
+    )
+st.info(
+    "**Read the three panels together:** persistent high ET + declining root-zone moisture + declining "
+    "NDVI in the same season may flag a period for field checks. These patterns only indicate a possible "
+    "crop-water concern; they do not pinpoint or prove crop stress. In this dashboard, FLDAS values are "
+    "shared regional averages across all MODIS zones, so cross-zone differences in water stress cannot be inferred."
+)
+
 rows = []
 for zone, group in paired.groupby("Zone"):
     r_et, p_et = correlation(group["NDVI"], group["ET_mm_month"])
