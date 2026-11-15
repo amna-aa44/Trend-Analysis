@@ -3,7 +3,7 @@
 
 **NASA Space Apps Challenge — *Be An Earth System Trend Detective!***  
 🔗 **Live Interactive Observatory:** [Launch Streamlit App](https://trend-analysis-3ubffzvgv5f78gm6xx4giz.streamlit.app/)
-
+🎥 **Project Video Demonstration:** [Watch Demo Video (.mp4)](https://github.com)
 **Project Presentation:** [Download PowerPoint (Amina Zafar.pptx)](https://github.com)
 
 
