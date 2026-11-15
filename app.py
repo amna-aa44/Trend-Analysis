@@ -386,7 +386,7 @@ with st.container(border=True):
             st.markdown(
                 """- **Mann–Kendall test:** A non-parametric test for whether a series has a consistent monotonic upward or downward trend over time. The Hamed–Rao modification adjusts the test for serial autocorrelation.
                 - **Sen slope:** The median rate of change between observations. Positive means the indicator tends to increase; negative means it tends to decrease. Units are shown for each indicator.
-                - **p-value:** Under the no-monotonic-trend null hypothesis and test assumptions, this is the probability of observing a test statistic at least this extreme. A common threshold is **p < 0.05**; it is not the probability that the trend is true.
+                - **p-value:** Under the no-monotonic-trend null hypothesis and test assumptions, this is the probability of observing a test statistic at least this extreme. A common threshold is **p < 0.05**.
                 - **Important distinction:** Pearson r summarizes monthly ET–moisture association; the Mann–Kendall test and Sen slope assess long-run trends in each indicator separately."""
             )
         st.markdown("#### Trend statements for this selection")
@@ -461,6 +461,62 @@ for name, result, unit in [
         }
     )
 st.dataframe(pd.DataFrame(trend_rows), hide_index=True, use_container_width=True)
+
+st.subheader("🌱 Relation among ET, soil moisture and vegetation greenness")
+if df_ndvi is None or df_ndvi.empty:
+    st.info("No readable MOD13A3 NDVI CSV was found. The FLDAS water analysis remains available, but the green-cover relationship cannot be shown without NDVI values.")
+else:
+    ndvi_match = df_ndvi[df_ndvi["Month"].isin(months_filter)].copy()
+    if ndvi_match.empty:
+        st.info("The NDVI file has no records for the selected months, so the ET–soil-moisture–greenness relationship cannot be evaluated here.")
+    else:
+        match_df = selected.merge(ndvi_match[["Year", "Month", "ID", "NDVI"]], on=["Year", "Month"], how="inner")
+        if match_df.empty:
+            st.info("The existing FLDAS and NDVI records do not overlap in the selected season, so no direct ET–soil-moisture–NDVI relationship can be shown.")
+        else:
+            st.markdown(
+                "This relationship is intended as a screening signal. If higher ET is paired with lower root-zone moisture and a falling NDVI in the same season, that pattern suggests a possible water-limited crop period. It is not a direct field-level crop-stress measurement, but it does provide a concise way to interpret how water demand, water supply, and canopy greenness move together."
+            )
+            relation_rows = []
+            for zone, zone_group in match_df.groupby("ID"):
+                r_et_ndvi, p_et_ndvi = safe_correlation(zone_group, "ET_mm_month", "NDVI")
+                r_sm_ndvi, p_sm_ndvi = safe_correlation(zone_group, "SM_10_40cm", "NDVI")
+                relation_rows.append(
+                    {
+                        "Zone": zone,
+                        "Mean NDVI": f"{zone_group['NDVI'].mean():.3f}",
+                        "ET vs NDVI r": f"{r_et_ndvi:.3f}" if pd.notna(r_et_ndvi) else "N/A",
+                        "ET vs NDVI p": f"{p_et_ndvi:.3g}" if pd.notna(p_et_ndvi) else "N/A",
+                        "Soil moisture vs NDVI r": f"{r_sm_ndvi:.3f}" if pd.notna(r_sm_ndvi) else "N/A",
+                        "Soil moisture vs NDVI p": f"{p_sm_ndvi:.3g}" if pd.notna(p_sm_ndvi) else "N/A",
+                    }
+                )
+            st.dataframe(pd.DataFrame(relation_rows), hide_index=True, use_container_width=True)
+
+            relation_fig = go.Figure()
+            for zone, zone_group in match_df.groupby("ID"):
+                relation_fig.add_trace(
+                    go.Scatter(
+                        x=zone_group["SM_10_40cm"],
+                        y=zone_group["NDVI"],
+                        mode="markers",
+                        name=str(zone),
+                        hovertemplate="Zone: %{text}<br>Soil moisture: %{x:.4f}<br>NDVI: %{y:.3f}<extra></extra>",
+                        text=[zone] * len(zone_group),
+                    )
+                )
+            relation_fig.update_layout(
+                template="plotly_white",
+                xaxis_title="Root-zone soil moisture (10–40 cm)",
+                yaxis_title="NDVI",
+                height=360,
+                title="NDVI response to soil moisture for matched seasonal observations",
+            )
+            st.plotly_chart(relation_fig, use_container_width=True)
+
+            st.caption(
+                "Significance: The aim here is to explain whether a seasonal decline in available moisture and an increase in ET coincides with lower canopy greenness. That pattern matters because it reflects the water-demand and vegetation-response relationship across the region. However, NDVI is still a greenness proxy, not a direct crop-stress field measurement, so the relationship should be read as an exploratory indicator rather than a confirmed agronomic diagnosis."
+            )
 
 st.subheader("🛰️ MODIS satellite vegetation greenness (NDVI)")
 if df_ndvi is None or df_ndvi.empty:
